@@ -7,27 +7,54 @@ export const config: PlasmoCSConfig = {
 }
 
 const FETCH_TARGET_PATH = "/api/trpc/getCustomerData"
+const BRIDGE_REQUEST_TYPE = "__t3_usage_overlay_bridge_request_state"
+const BRIDGE_RESPONSE_TYPE = "__t3_usage_overlay_bridge_state"
 const CHAT_FORM_SELECTOR = "#chat-input-form"
 const INLINE_BADGE_ID = "__t3-usage-inline-badge"
 const INLINE_BADGE_ROW_ID = "__t3-usage-inline-badge-row"
 const DEBUG = true
 
 type UsagePayload = {
+  subTier: string | null
+  usageBand: string | null
+  billingNextResetAt: number | string | null
+  subscription: {
+    productId: string | null
+    productName: string | null
+    status: string | null
+    currentPeriodStart: number | string | null
+    currentPeriodEnd: number | string | null
+    canceledAt: number | string | null
+    trialEndsAt: number | string | null
+  } | null
   usagePeriodPercentage: number
   lifetimeBalance: number | string
-  usageWindowNextResetAt: number | string
+  usageWindowNextResetAt: number | string | null
 }
 
 type OverlayState = {
+  subTier: string | null
+  usageBand: string | null
+  billingNextResetAt: number | string | null
+  subscription: {
+    productId: string | null
+    productName: string | null
+    status: string | null
+    currentPeriodStart: number | string | null
+    currentPeriodEnd: number | string | null
+    canceledAt: number | string | null
+    trialEndsAt: number | string | null
+  } | null
   usagePeriodPercentage: number
   lifetimeBalance: number | string
-  usageWindowNextResetAt: number | string
+  usageWindowNextResetAt: number | string | null
   deltaPercentage: number | null
 }
 
 declare global {
   interface Window {
     __t3UsageOverlayFetchPatched?: boolean
+    __t3UsageOverlayBridgePatched?: boolean
     __t3UsageOverlayDebug?: {
       bootedAtIso: string
       matchedRequestCount: number
@@ -106,20 +133,85 @@ const parseUsagePayload = (jsonValue: unknown): UsagePayload | null => {
     }
 
     const usageRecord = value as Record<string, unknown>
+    const subTier = typeof usageRecord.subTier === "string" ? usageRecord.subTier : null
+    const usageBand =
+      typeof usageRecord.usageBand === "string" ? usageRecord.usageBand : null
+    const billingNextResetAt =
+      typeof usageRecord.billingNextResetAt === "number" ||
+      typeof usageRecord.billingNextResetAt === "string"
+        ? usageRecord.billingNextResetAt
+        : null
+
+    const rawSubscription = usageRecord.subscription
+    const subscription =
+      rawSubscription && typeof rawSubscription === "object"
+        ? (() => {
+            const subscriptionRecord = rawSubscription as Record<string, unknown>
+            const productId =
+              typeof subscriptionRecord.productId === "string"
+                ? subscriptionRecord.productId
+                : null
+            const productName =
+              typeof subscriptionRecord.productName === "string"
+                ? subscriptionRecord.productName
+                : null
+            const status =
+              typeof subscriptionRecord.status === "string" ? subscriptionRecord.status : null
+            const currentPeriodStart =
+              typeof subscriptionRecord.currentPeriodStart === "number" ||
+              typeof subscriptionRecord.currentPeriodStart === "string"
+                ? subscriptionRecord.currentPeriodStart
+                : null
+            const currentPeriodEnd =
+              typeof subscriptionRecord.currentPeriodEnd === "number" ||
+              typeof subscriptionRecord.currentPeriodEnd === "string"
+                ? subscriptionRecord.currentPeriodEnd
+                : null
+            const canceledAt =
+              typeof subscriptionRecord.canceledAt === "number" ||
+              typeof subscriptionRecord.canceledAt === "string"
+                ? subscriptionRecord.canceledAt
+                : null
+            const trialEndsAt =
+              typeof subscriptionRecord.trialEndsAt === "number" ||
+              typeof subscriptionRecord.trialEndsAt === "string"
+                ? subscriptionRecord.trialEndsAt
+                : null
+
+            return {
+              productId,
+              productName,
+              status,
+              currentPeriodStart,
+              currentPeriodEnd,
+              canceledAt,
+              trialEndsAt
+            }
+          })()
+        : null
     const usagePeriodPercentage = parseNumericValue(usageRecord.usagePeriodPercentage)
     const lifetimeBalance = usageRecord.lifetimeBalance
-    const usageWindowNextResetAt = usageRecord.usageWindowNextResetAt
+    const usageWindowNextResetAt =
+      typeof usageRecord.usageWindowNextResetAt === "number" ||
+      typeof usageRecord.usageWindowNextResetAt === "string"
+        ? usageRecord.usageWindowNextResetAt
+        : usageRecord.usageWindowNextResetAt === null
+          ? null
+          : undefined
 
     if (
       usagePeriodPercentage === null ||
       (typeof lifetimeBalance !== "number" && typeof lifetimeBalance !== "string") ||
-      (typeof usageWindowNextResetAt !== "number" &&
-        typeof usageWindowNextResetAt !== "string")
+      usageWindowNextResetAt === undefined
     ) {
       return null
     }
 
     return {
+      subTier,
+      usageBand,
+      billingNextResetAt,
+      subscription,
       usagePeriodPercentage,
       lifetimeBalance,
       usageWindowNextResetAt
@@ -251,7 +343,11 @@ const formatSignedPercent = (value: number | null): string =>
 const formatBalance = (value: number | string): string =>
   typeof value === "number" ? value.toLocaleString() : value
 
-const formatResetDateTime = (resetAt: number | string): string => {
+const formatResetDateTime = (resetAt: number | string | null): string => {
+  if (resetAt === null) {
+    return "Unknown"
+  }
+
   const resetTimeMs = parseResetTimeMs(resetAt)
   if (resetTimeMs === null) {
     return "Unknown"
@@ -458,6 +554,10 @@ const processTargetResponse = async (
 
   lastUsagePeriodPercentage = latestPayload.usagePeriodPercentage
   latestState = {
+    subTier: latestPayload.subTier,
+    usageBand: latestPayload.usageBand,
+    billingNextResetAt: latestPayload.billingNextResetAt,
+    subscription: latestPayload.subscription,
     usagePeriodPercentage: latestPayload.usagePeriodPercentage,
     lifetimeBalance: latestPayload.lifetimeBalance,
     usageWindowNextResetAt: latestPayload.usageWindowNextResetAt,
@@ -498,7 +598,44 @@ const installFetchPatch = (): void => {
   setStatus("Fetch patch installed in MAIN world")
 }
 
+const installBridgeHandler = (): void => {
+  if (window.__t3UsageOverlayBridgePatched) {
+    return
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window || !event.data || typeof event.data !== "object") {
+      return
+    }
+
+    const messageRecord = event.data as Record<string, unknown>
+    if (
+      messageRecord.type !== BRIDGE_REQUEST_TYPE ||
+      typeof messageRecord.requestId !== "string"
+    ) {
+      return
+    }
+
+    window.postMessage(
+      {
+        type: BRIDGE_RESPONSE_TYPE,
+        requestId: messageRecord.requestId,
+        payload: {
+          ok: true,
+          state: latestState,
+          status: lastStatus,
+          error: lastError
+        }
+      },
+      "*"
+    )
+  })
+
+  window.__t3UsageOverlayBridgePatched = true
+}
+
 ensureReattachTick()
 renderUsageBadge()
 setStatus("Content script loaded")
 installFetchPatch()
+installBridgeHandler()
